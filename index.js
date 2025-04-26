@@ -2,6 +2,7 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const bodyParser = require('body-parser');
+const dns = require('dns');
 const app = express();
 
 // Basic Configuration
@@ -17,29 +18,29 @@ const Database = require('better-sqlite3');
 const db = new Database('urls.db', { verbose: console.log });
 db.pragma('journal_mode = WAL');
 
-const createTable = "CREATE TABLE IF NOT EXISTS urls('id' INTEGER PRIMARY KEY AUTOINCREMENT, 'long_url' VARCHAR); ";
+const createTable = "CREATE TABLE IF NOT EXISTS url('id' INTEGER PRIMARY KEY AUTOINCREMENT, 'long_url' VARCHAR); ";
 db.exec(createTable);
 
 
 // Database functions
 function getLongUrl(id) {
-  return db.prepare('SELECT long_url FROM urls WHERE id = ?').get(id);
+  return db.prepare('SELECT long_url FROM url WHERE id = ?').get(id);
 }
 
 function getShortUrl(longUrl) {
-  return db.prepare('SELECT id FROM urls WHERE long_url = ?').get(longUrl);
+  return db.prepare('SELECT id FROM url WHERE long_url = ?').get(longUrl);
 }
 
 function addUrl(longUrl) {
-  const stmt = db.prepare('INSERT INTO urls (long_url) VALUES (?)');
+  const stmt = db.prepare('INSERT INTO url (long_url) VALUES (?)');
   const info = stmt.run(longUrl);
   console.log(info.lastInsertRowid);
   return info.lastInsertRowid;
 }
 
 // URL regex
-const pattern = /https?:\/\/(www\.)?[-a-zA-Z0-9@:%._\+~#=]{1,256}\.[a-zA-Z0-9()]{1,6}\b([-a-zA-Z0-9()@:%_\+.~#?&//=]*)/gi;
-const regex = new RegExp(pattern);
+// const pattern = /https?:\/\/(www\.)?[-a-zA-Z0-9@:%._\+~#=]{1,256}\.[a-zA-Z0-9()]{1,6}\b([-a-zA-Z0-9()@:%_\+.~#?&//=]*)/gi;
+// const regex = new RegExp(pattern);
 
 
 // Routes
@@ -58,8 +59,12 @@ app.get('/api/hello', function(req, res) {
 // Redirect to original url
 app.get('/api/shorturl/:short_url', function(req, res) {
   shortUrl = req.params.short_url;
-  longUrl = getLongUrl(shortUrl).long_url;
-  res.redirect(longUrl);
+  try {
+    longUrl = getLongUrl(shortUrl).long_url;
+    res.redirect(longUrl);
+  } catch (e) {
+    res.json({ error: 'No short URL found for the given input' });
+  }
 });
 
 
@@ -67,21 +72,24 @@ app.get('/api/shorturl/:short_url', function(req, res) {
 app.post('/api/shorturl', function(req, res) {
   const longUrl = req.body.url;
 
-  // If not valid URL: return error message
-  if (!longUrl.match(regex)) {
+  try {
+    const urlObject = new URL(longUrl);
+    dns.lookup(urlObject.hostname, (err, address, family) => {
+      if (err) {
+        throw Error;
+      } 
+      const id = getShortUrl(longUrl);
+      if (id) {
+        res.json({ original_url: longUrl, short_url: id.id });
+      }
+      else {
+        const shortUrl = addUrl(longUrl);
+        res.json({ original_url: longUrl, short_url: shortUrl });
+      }   
+    })
+  } catch (e) {
     res.json({ error: 'invalid url' });
-    return;
-  }
-
-  // Check if URL already in database
-  const id = getShortUrl(longUrl);
-  if (id) {
-    res.json({ original_url: longUrl, short_url: id.id });
-  }
-  else {
-    const shortUrl = addUrl(longUrl);
-    res.json({ original_url: longUrl, short_url: shortUrl });
-  }
+  }   
 });
   
 
